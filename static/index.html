@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integration Hub</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #fff; --ink: #14181f; --muted: #667085; --line: #e3e6eb; --brand: #0b6bcb; --brand-soft: #e8f1fb;
+    --ok: #067647; --ok-soft: #ecfdf3; --bad: #b42318; --bad-soft: #fef3f2; --wait: #b54708; --wait-soft: #fff6ed; --grey-soft: #eef1f6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  .mode { font-size: 12px; color: var(--muted); border: 1px solid var(--line); background: var(--panel); padding: 4px 10px; border-radius: 999px; }
+  main { display: grid; grid-template-columns: 330px 1fr; gap: 20px; padding: 0 28px 28px; max-width: 1180px; margin: 0 auto; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; height: min(820px, calc(100vh - 100px)); min-height: 540px; overflow-y: auto; }
+  .panel h2 { position: sticky; top: 0; background: var(--panel); z-index: 1; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .try { padding: 14px 18px 4px; }
+  .try button { display: block; width: 100%; text-align: left; font: inherit; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; cursor: pointer; }
+  .try button:hover { border-color: var(--brand); background: var(--brand-soft); }
+  .try b { display: block; }
+  .try span { color: var(--muted); font-size: 13px; }
+  pre.out { margin: 4px 18px 18px; padding: 10px 12px; background: #0f172a; color: #d6e2ff; border-radius: 10px; font: 12.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; min-height: 64px; }
+  .event { border-bottom: 1px solid var(--line); padding: 14px 20px; }
+  .top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; cursor: pointer; }
+  .top b { font-size: 15px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .chips { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font-size: 12.5px; padding: 2px 10px; border-radius: 999px; font-weight: 600; background: var(--grey-soft); color: #344054; }
+  .chip.sent { background: var(--ok-soft); color: var(--ok); }
+  .chip.dead { background: var(--bad-soft); color: var(--bad); }
+  .chip.retry { background: var(--wait-soft); color: var(--wait); }
+  .detail { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .drow { display: grid; grid-template-columns: 100px 90px 70px 1fr auto; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); align-items: center; font-size: 13.5px; }
+  .drow:last-child { border-bottom: 0; }
+  .drow .err { color: var(--bad); word-break: break-word; }
+  .drow .ok { color: var(--muted); }
+  button.replay { font: inherit; font-weight: 600; font-size: 13px; background: var(--brand); color: #fff; border: 0; border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  details.payload { padding: 8px 12px; border-top: 1px solid var(--line); background: #fafbfc; }
+  details.payload summary { cursor: pointer; color: var(--brand); font-weight: 600; font-size: 13px; }
+  details.payload pre { margin: 8px 0 0; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+  .empty { padding: 28px 22px; color: var(--muted); }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 0 16px 20px; } .panel { height: auto; min-height: 0; } .drow { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Integration Hub</h1>
+  <span class="mode" id="mode">starting</span>
+</header>
+<main>
+  <section class="panel" aria-label="Send a test webhook">
+    <h2>Send a test webhook</h2>
+    <div class="try" id="try"></div>
+    <pre class="out" id="out">The reply to the webhook appears here.</pre>
+  </section>
+  <section class="panel" aria-label="Events">
+    <h2>Orders received</h2>
+    <div id="events"><div class="empty">Nothing yet. Send a test webhook.</div></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const NAMES = { crm: "CRM", accounting: "Accounting", slack: "Slack", sheets: "Sheets" };
+const SCENARIOS = [
+  ["normal", "A normal order", "Signed correctly, delivered to all four systems."],
+  ["flaky_crm", "The CRM is failing", "The CRM errors twice. Watch it retry, then succeed."],
+  ["bad_currency", "Accounting rejects it", "An unsupported currency. Retrying would not help, so it stops and waits for a person."],
+  ["duplicate", "The same order twice", "The second copy is recognised and ignored."],
+  ["forged", "A forged request", "Signed with the wrong secret. Refused with a 401."],
+];
+let maxAttempts = 5, open = new Set(), busy = false;
+
+function node(tag, cls, t) { const e = document.createElement(tag); if (cls) e.className = cls; if (t !== undefined) e.textContent = t; return e; }
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || "Request failed");
+  return j;
+}
+function label(d) {
+  if (d.status === "sent") return ["sent", "sent"];
+  if (d.status === "dead") return ["failed", "dead"];
+  return d.attempts ? ["retry " + d.attempts + " of " + maxAttempts, "retry"] : ["waiting", ""];
+}
+function clock(ts) { return new Date(ts * 1000).toLocaleTimeString("en-GB"); }
+
+function render(events) {
+  const box = $("events");
+  if (!events.length) { box.innerHTML = '<div class="empty">Nothing yet. Send a test webhook.</div>'; return; }
+  box.innerHTML = "";
+  events.forEach((e) => {
+    const card = node("div", "event");
+    const top = node("div", "top");
+    const left = node("div"); left.appendChild(node("b", "", e.id)); left.append("  " + e.customer);
+    top.append(left, node("span", "meta", Number(e.total).toLocaleString("en-GB", { minimumFractionDigits: 2 }) + " " + e.currency + "  at " + clock(e.received_at)));
+    top.onclick = () => { open.has(e.id) ? open.delete(e.id) : open.add(e.id); render(events); };
+    card.appendChild(top);
+    const chips = node("div", "chips");
+    e.deliveries.forEach((d) => { const [text, cls] = label(d); chips.appendChild(node("span", "chip " + cls, (NAMES[d.destination] || d.destination) + " " + text)); });
+    card.appendChild(chips);
+    if (open.has(e.id)) {
+      const detail = node("div", "detail");
+      e.deliveries.forEach((d) => {
+        const [text, cls] = label(d);
+        const row = node("div", "drow");
+        row.append(node("b", "", NAMES[d.destination] || d.destination), node("span", "chip " + cls, text), node("span", "meta", d.attempts + (d.attempts === 1 ? " try" : " tries")));
+        row.appendChild(d.last_error ? node("span", "err", d.last_error) : node("span", "ok", d.status === "sent" ? "Accepted with " + d.last_status_code : ""));
+        if (d.status === "dead") { const b = node("button", "replay", "Replay"); b.onclick = async () => { await api("/api/deliveries/" + d.id + "/replay", { method: "POST" }); poll(); }; row.appendChild(b); } else row.appendChild(node("span"));
+        detail.appendChild(row);
+      });
+      const p = node("details", "payload"); p.appendChild(node("summary", "", "The order as received"));
+      p.appendChild(node("pre", "", JSON.stringify(e.payload, null, 2))); detail.appendChild(p);
+      card.appendChild(detail);
+    }
+    box.appendChild(card);
+  });
+}
+async function poll() { if (busy) return; busy = true; try { render(await api("/api/events")); } catch (e) {} busy = false; }
+
+(async () => {
+  const h = await api("/api/health");
+  maxAttempts = h.max_attempts;
+  $("mode").textContent = h.demo_mode ? "Demo mode, mock systems" : "Live mode";
+  if (h.demo_mode) {
+    SCENARIOS.forEach(([id, title, text]) => {
+      const b = node("button"); b.appendChild(node("b", "", title)); b.appendChild(node("span", "", text));
+      b.onclick = async () => { try { $("out").textContent = JSON.stringify(await api("/api/demo/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scenario: id }) }), null, 2); } catch (e) { $("out").textContent = e.message; } poll(); };
+      $("try").appendChild(b);
+    });
+  } else { $("try").appendChild(node("div", "meta", "Demo buttons are off. Send signed requests to /webhooks/orders.")); }
+  poll(); setInterval(poll, 1500);
+})();
+</script>
+</body>
+</html>
